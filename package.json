@@ -13,6 +13,7 @@
   "author": "Lukas Weichselbaum <lwe@google.com>",
   "license": "Apache-2.0",
   "prepublish": "tsc",
+  "prepack": "tsc",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/google/csp-evaluator.git"
