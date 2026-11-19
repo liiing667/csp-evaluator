@@ -87,6 +87,16 @@ export class CspEvaluator {
       for (const check of parsedCspChecks) {
         this.findings = this.findings.concat(check(this.csp));
       }
+
+      // checkTrustedTypesPolicy evaluates the effective CSP (Trusted Types
+      // directives are removed for pre-CSP3 browsers) and is only relevant
+      // together with the strict CSP checks.
+      if (this.version >= csp.Version.CSP3 &&
+          parsedCspChecks.includes(
+              strictcspChecks.checkRequiresTrustedTypesForScripts)) {
+        this.findings = this.findings.concat(
+            strictcspChecks.checkTrustedTypesPolicy(effectiveCsp));
+      }
     }
 
     // Checks dependent on CSP version.

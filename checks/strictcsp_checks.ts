@@ -177,3 +177,107 @@ export function checkRequiresTrustedTypesForScripts(parsedCsp: Csp): Finding[] {
 
   return [];
 }
+
+
+/**
+ * Checks if the policy names that can actually be created in the browser
+ * restrict Trusted Types strongly enough to control DOM XSS sinks.
+ *
+ * Requiring Trusted Types for scripts alone does not provide any protection
+ * if an attacker who can execute script can also create their own Trusted
+ * Type policy (or a permissive default policy) that passes arbitrary strings
+ * through to the sinks. The 'trusted-types' directive allowlists the policy
+ * names that may be created. A missing directive, a wildcard or a default
+ * policy therefore leaves the DOM XSS sinks effectively unprotected, while an
+ * empty allowlist (no policy can be created) or a list of specific policy
+ * names is considered safe.
+ *
+ * Examples of policies that still allow DOM XSS:
+ *  require-trusted-types-for 'script'
+ *  require-trusted-types-for 'script'; trusted-types *
+ *  require-trusted-types-for 'script'; trusted-types default
+ *
+ * Example of a locked down policy where this check does not trigger:
+ *  require-trusted-types-for 'script'; trusted-types myPolicy
+ *
+ * @param parsedCsp A parsed csp.
+ * @param cspVersion The CSP version as implemented by the browser. Trusted
+ *     Types directives are unsupported and ignored before CSP3.
+ */
+export function checkTrustedTypesPolicy(
+    parsedCsp: Csp, cspVersion: csp.Version = csp.Version.CSP3): Finding[] {
+  const rttfDirective =
+      parsedCsp.getEffectiveDirective(csp.Directive.REQUIRE_TRUSTED_TYPES_FOR);
+  const rttfValues: string[] = parsedCsp.directives[rttfDirective] || [];
+
+  // Trusted Types is not enforced, so the policy configuration cannot be
+  // evaluated. checkRequiresTrustedTypesForScripts already reports this.
+  if (!rttfValues.includes(csp.TrustedTypesSink.SCRIPT)) {
+    return [];
+  }
+
+  // Browsers that do not support CSP3 ignore the Trusted Types directives
+  // entirely, so there is no Trusted Types enforcement to evaluate.
+  if (cspVersion < csp.Version.CSP3) {
+    return [];
+  }
+
+  const reportOnlyNote = parsedCsp.reportOnly ?
+      ' Note that this policy is report-only, so violations are only ' +
+          'reported and no sinks are actually blocked.' :
+      '';
+
+  const ttDirective = csp.Directive.TRUSTED_TYPES;
+  const ttValues: string[] = parsedCsp.directives[ttDirective] || [];
+  const hasTrustedTypesDirective = ttDirective in parsedCsp.directives;
+
+  // Policy names are everything that is neither a quoted keyword nor the
+  // wildcard. Quoted policy names are normalized by the parser like keywords.
+  const policyNames =
+      ttValues.filter((value) => value !== '*' && !value.startsWith('\''));
+
+  const findings: Finding[] = [];
+
+  if (!hasTrustedTypesDirective) {
+    // No 'trusted-types' directive: any unique policy name can be created.
+    findings.push(new Finding(
+        Type.TRUSTED_TYPES_NO_POLICY,
+        'Trusted Types are required, but no "trusted-types" directive ' +
+            'restricts the policies that may be created. Any script can ' +
+            'create its own policy via trustedTypes.createPolicy() with an ' +
+            'arbitrary name and pass attacker controlled strings through ' +
+            'DOM XSS sinks. Add a "trusted-types" directive with an ' +
+            'allowlist of specific policy names.' + reportOnlyNote,
+        Severity.MEDIUM_MAYBE, csp.Directive.REQUIRE_TRUSTED_TYPES_FOR));
+  } else if (ttValues.includes('*')) {
+    // Wildcard policy name: any unique policy name can be created.
+    findings.push(new Finding(
+        Type.TRUSTED_TYPES_POLICY_WILDCARD,
+        'The wildcard policy name "*" in "trusted-types" allows creating ' +
+            'policies with any name. Any script can create its own policy ' +
+            'via trustedTypes.createPolicy() and pass attacker controlled ' +
+            'strings through DOM XSS sinks, so Trusted Types does not ' +
+            'control the injection sinks. Replace the wildcard with an ' +
+            'allowlist of specific policy names.' + reportOnlyNote,
+        Severity.MEDIUM_MAYBE, ttDirective, '*'));
+  } else if (policyNames.length === 0) {
+    // An empty allowlist (e.g. an empty directive, "'none'" or only
+    // "'allow-duplicates'") means that no policy can be created. This is the
+    // strongest configuration, so there is nothing to report.
+    return [];
+  } else if (policyNames.includes('default')) {
+    // A default policy is allowed.
+    findings.push(new Finding(
+        Type.TRUSTED_TYPES_DEFAULT_POLICY,
+        'The "trusted-types" directive allows creating the default policy. ' +
+            'The default policy is invoked for raw strings passed to DOM XSS ' +
+            'sinks and any script can (re)define it with a permissive ' +
+            'createHTML() that returns its input unchanged, which bypasses ' +
+            'Trusted Types. Prefer a non-default policy with a specific ' +
+            'name and keep the default policy for migration only.' +
+            reportOnlyNote,
+        Severity.MEDIUM_MAYBE, ttDirective, 'default'));
+  }
+
+  return findings;
+}

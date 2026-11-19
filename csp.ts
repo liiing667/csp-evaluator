@@ -30,15 +30,25 @@ export class Csp {
   directives: Record<string, string[]|undefined> = {};
 
   /**
+   * Whether this policy was delivered via a
+   * Content-Security-Policy-Report-Only header, meaning that violations are
+   * only reported but not enforced.
+   */
+  reportOnly: boolean = false;
+
+  /**
    * Creates a CSP object from a list of directives.
    * @param directives CSP directives.
    */
-  constructor(directives: Record<string, string[]|undefined> = {}) {
+  constructor(
+      directives: Record<string, string[]|undefined> = {},
+      reportOnly: boolean = false) {
     for (const [directive, directiveValues] of Object.entries(directives)) {
       if (directiveValues) {
         this.directives[directive] = [...directiveValues];
       }
     }
+    this.reportOnly = reportOnly;
   }
 
   /**
@@ -47,7 +57,9 @@ export class Csp {
    */
   clone(): Csp {
     // Use the constructor that takes in directives to create a deep copy.
-    return new Csp(this.directives);
+    const clone = new Csp(this.directives);
+    clone.reportOnly = this.reportOnly;
+    return clone;
   }
 
   /**

@@ -28,12 +28,15 @@ export class CspParser {
   csp: csp.Csp;
   /**
    * @param unparsedCsp A Content Security Policy as string.
+   * @param reportOnly Whether the policy was delivered in a
+   *     Content-Security-Policy-Report-Only header and therefore only reports
+   *     violations without enforcing them.
    */
-  constructor(unparsedCsp: string) {
+  constructor(unparsedCsp: string, reportOnly: boolean = false) {
     /**
      * Parsed CSP
      */
-    this.csp = new csp.Csp();
+    this.csp = new csp.Csp({}, reportOnly);
 
     this.parse(unparsedCsp);
   }
@@ -44,7 +47,7 @@ export class CspParser {
    */
   parse(unparsedCsp: string): csp.Csp {
     // Reset the internal state:
-    this.csp = new csp.Csp();
+    this.csp = new csp.Csp({}, this.csp ? this.csp.reportOnly : false);
 
     // Split CSP into directive tokens.
     const directiveTokens = unparsedCsp.split(';');

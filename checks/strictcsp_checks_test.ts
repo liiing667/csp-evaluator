@@ -17,7 +17,7 @@
  * @author lwe@google.com (Lukas Weichselbaum)
  */
 
-import {Finding, Severity} from '../finding';
+import {Finding, Severity, Type} from '../finding';
 import {CspParser} from '../parser';
 
 import {CheckerFunction} from './checker';
@@ -108,5 +108,119 @@ describe('Test strictcsp checks', () => {
 
     const violations = checkCsp(test, strictcspChecks.checkAllowlistFallback);
     expect(violations.length).toBe(0);
+  });
+
+  /** Tests for strictcspChecks.checkTrustedTypesPolicy */
+  it('CheckTrustedTypesPolicyDoesntFireWithoutTrustedTypes', () => {
+    const test = 'script-src \'nonce-test\'';
+
+    const violations = checkCsp(test, strictcspChecks.checkTrustedTypesPolicy);
+    expect(violations.length).toBe(0);
+  });
+
+  it('CheckTrustedTypesPolicyDoesntFireIfTrustedTypesNotRequired', () => {
+    const test = 'trusted-types *';
+
+    const violations = checkCsp(test, strictcspChecks.checkTrustedTypesPolicy);
+    expect(violations.length).toBe(0);
+  });
+
+  it('CheckTrustedTypesPolicyDoesntFireForSpecificPolicyName', () => {
+    const test = 'require-trusted-types-for \'script\'; trusted-types myPolicy';
+
+    const violations = checkCsp(test, strictcspChecks.checkTrustedTypesPolicy);
+    expect(violations.length).toBe(0);
+  });
+
+  it('CheckTrustedTypesPolicyDoesntFireForMultipleSpecificPolicyNames', () => {
+    const test =
+        'require-trusted-types-for \'script\'; trusted-types policy1 policy2 ' +
+        '\'allow-duplicates\'';
+
+    const violations = checkCsp(test, strictcspChecks.checkTrustedTypesPolicy);
+    expect(violations.length).toBe(0);
+  });
+
+  it('CheckTrustedTypesPolicyDoesntFireForEmptyAllowlist', () => {
+    const test = 'require-trusted-types-for \'script\'; trusted-types';
+
+    const violations = checkCsp(test, strictcspChecks.checkTrustedTypesPolicy);
+    expect(violations.length).toBe(0);
+  });
+
+  it('CheckTrustedTypesPolicyDoesntFireForNoneKeyword', () => {
+    const test =
+        'require-trusted-types-for \'script\'; trusted-types \'none\'';
+
+    const violations = checkCsp(test, strictcspChecks.checkTrustedTypesPolicy);
+    expect(violations.length).toBe(0);
+  });
+
+  it('CheckTrustedTypesPolicyDoesntFireForAllowDuplicatesOnly', () => {
+    const test = 'require-trusted-types-for \'script\'; trusted-types ' +
+        '\'allow-duplicates\'';
+
+    const violations = checkCsp(test, strictcspChecks.checkTrustedTypesPolicy);
+    expect(violations.length).toBe(0);
+  });
+
+  it('CheckTrustedTypesPolicyFiresWithoutTrustedTypesDirective', () => {
+    const test = 'require-trusted-types-for \'script\'';
+
+    const violations = checkCsp(test, strictcspChecks.checkTrustedTypesPolicy);
+    expect(violations.length).toBe(1);
+    expect(violations[0].type).toBe(Type.TRUSTED_TYPES_NO_POLICY);
+    expect(violations[0].severity).toBe(Severity.MEDIUM_MAYBE);
+  });
+
+  it('CheckTrustedTypesPolicyFiresForWildcardPolicyName', () => {
+    const test = 'require-trusted-types-for \'script\'; trusted-types *';
+
+    const violations = checkCsp(test, strictcspChecks.checkTrustedTypesPolicy);
+    expect(violations.length).toBe(1);
+    expect(violations[0].type).toBe(Type.TRUSTED_TYPES_POLICY_WILDCARD);
+    expect(violations[0].severity).toBe(Severity.MEDIUM_MAYBE);
+    expect(violations[0].value).toBe('*');
+    expect(violations[0].directive).toBe('trusted-types');
+  });
+
+  it('CheckTrustedTypesPolicyFiresForDefaultPolicy', () => {
+    const test =
+        'require-trusted-types-for \'script\'; trusted-types default';
+
+    const violations = checkCsp(test, strictcspChecks.checkTrustedTypesPolicy);
+    expect(violations.length).toBe(1);
+    expect(violations[0].type).toBe(Type.TRUSTED_TYPES_DEFAULT_POLICY);
+    expect(violations[0].severity).toBe(Severity.MEDIUM_MAYBE);
+    expect(violations[0].value).toBe('default');
+  });
+
+  it('CheckTrustedTypesPolicyFiresForDefaultPolicyAlongsideAnotherPolicy',
+     () => {
+       const test = 'require-trusted-types-for \'script\'; trusted-types ' +
+           'myPolicy default';
+
+       const violations =
+           checkCsp(test, strictcspChecks.checkTrustedTypesPolicy);
+       expect(violations.length).toBe(1);
+       expect(violations[0].type).toBe(Type.TRUSTED_TYPES_DEFAULT_POLICY);
+     });
+
+  it('CheckTrustedTypesPolicyReportsReportOnlyMode', () => {
+    const test = 'require-trusted-types-for \'script\'; trusted-types *';
+    const parsedCsp = (new CspParser(test, true)).csp;
+
+    expect(parsedCsp.reportOnly).toBe(true);
+    const violations = strictcspChecks.checkTrustedTypesPolicy(parsedCsp);
+    expect(violations.length).toBe(1);
+    expect(violations[0].description).toContain('report-only');
+  });
+
+  it('CheckTrustedTypesPolicyDoesNotMentionReportOnlyInEnforceMode', () => {
+    const test = 'require-trusted-types-for \'script\'; trusted-types *';
+
+    const violations = checkCsp(test, strictcspChecks.checkTrustedTypesPolicy);
+    expect(violations.length).toBe(1);
+    expect(violations[0].description).not.toContain('report-only');
   });
 });

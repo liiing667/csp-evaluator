@@ -159,4 +159,21 @@ describe('Test parser', () => {
     expect(TEST_ONLY.normalizeDirectiveValue('example.com/TEST'))
         .toBe('example.com/TEST');
   });
+
+  it('CspParserDefaultsToEnforceMode', () => {
+    const parsedCsp = new CspParser('script-src \'none\'').csp;
+    expect(parsedCsp.reportOnly).toBe(false);
+  });
+
+  it('CspParserKeepsReportOnlyFlag', () => {
+    const parsedCsp =
+        new CspParser('require-trusted-types-for \'script\'', true).csp;
+    expect(parsedCsp.reportOnly).toBe(true);
+  });
+
+  it('CspParserKeepsReportOnlyFlagWhenReparsing', () => {
+    const parser = new CspParser('script-src \'none\'', true);
+    parser.parse('script-src \'self\'');
+    expect(parser.csp.reportOnly).toBe(true);
+  });
 });
