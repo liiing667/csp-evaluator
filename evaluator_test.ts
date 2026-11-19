@@ -19,9 +19,10 @@
 
 import 'jasmine';
 
-import {Csp} from './csp';
+import {Csp, Version} from './csp';
 import {CspEvaluator} from './evaluator';
 import {Finding, Severity, Type} from './finding';
+import {CspParser} from './parser';
 
 describe('Test evaluator', () => {
   it('CspEvaluator', () => {
@@ -45,5 +46,60 @@ describe('Test evaluator', () => {
 
     const expectedFindings = [fakeFinding, fakeFinding, fakeFinding];
     expect(findings).toEqual(expectedFindings);
+  });
+
+  it('EvaluateSurfacesHighRiskFromOldCspVersions', () => {
+    // 'unsafe-inline' is ignored in the presence of a nonce in CSP2 and
+    // above, but CSP1 browsers don't know nonces and will execute inline
+    // scripts. The high risk finding of the old browser's effective policy
+    // must show up in the evaluation.
+    const testCsp = 'default-src \'none\'; ' +
+        'script-src \'nonce-12345678\' \'unsafe-inline\'; ' +
+        'object-src \'none\'; base-uri \'none\';';
+    const parsed = (new CspParser(testCsp)).csp;
+
+    const findings = (new CspEvaluator(parsed)).evaluate();
+
+    const unsafeInlineFindings = findings.filter(
+        (finding) => finding.type === Type.SCRIPT_UNSAFE_INLINE &&
+            finding.severity === Severity.HIGH);
+    expect(unsafeInlineFindings.length).toBe(1);
+  });
+
+  it('EvaluateStrictPolicyStaysClean', () => {
+    // A strict nonce based policy is effective in all CSP versions and must
+    // not produce high severity findings.
+    const testCsp = 'default-src \'none\'; ' +
+        'script-src \'nonce-12345678\' \'strict-dynamic\'; ' +
+        'object-src \'none\'; base-uri \'none\';';
+    const parsed = (new CspParser(testCsp)).csp;
+
+    const findings = (new CspEvaluator(parsed)).evaluate();
+
+    expect(findings.filter((finding) => finding.severity === Severity.HIGH))
+        .toEqual([]);
+  });
+
+  it('EvaluateRespectsConfiguredVersion', () => {
+    // The policy is evaluated as seen by browsers supporting all CSP versions
+    // up to the configured one.
+    const testCsp = 'script-src \'nonce-12345678\' \'unsafe-inline\'';
+    const parsed = (new CspParser(testCsp)).csp;
+
+    const evaluatedVersions: Array<Version|undefined> = [];
+    const recordVersion = (effectiveCsp: Csp) => {
+      evaluatedVersions.push(effectiveCsp.version);
+      return [];
+    };
+
+    (new CspEvaluator(parsed, Version.CSP1)).evaluate(undefined, [
+      recordVersion
+    ]);
+    expect(evaluatedVersions).toEqual([Version.CSP1]);
+
+    evaluatedVersions.length = 0;
+    (new CspEvaluator(parsed)).evaluate(undefined, [recordVersion]);
+    expect(evaluatedVersions)
+        .toEqual([Version.CSP1, Version.CSP2, Version.CSP3]);
   });
 });

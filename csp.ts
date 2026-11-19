@@ -30,6 +30,20 @@ export class Csp {
   directives: Record<string, string[]|undefined> = {};
 
   /**
+   * CSP version this policy was specialized for. Only set on effective
+   * policies returned by getEffectiveCsp().
+   */
+  version?: Version;
+
+  /**
+   * Provenance of the directives of an effective policy. Maps a directive to
+   * the directive of the original policy its effective values are inherited
+   * from (the directive itself, if it is set explicitly in the policy).
+   * Only populated by getEffectiveCsp().
+   */
+  directiveSources: Record<string, string> = {};
+
+  /**
    * Creates a CSP object from a list of directives.
    * @param directives CSP directives.
    */
@@ -47,7 +61,10 @@ export class Csp {
    */
   clone(): Csp {
     // Use the constructor that takes in directives to create a deep copy.
-    return new Csp(this.directives);
+    const clone = new Csp(this.directives);
+    clone.version = this.version;
+    clone.directiveSources = {...this.directiveSources};
+    return clone;
   }
 
   /**
@@ -83,10 +100,43 @@ export class Csp {
   getEffectiveCsp(cspVersion: Version, optFindings?: Finding[]): Csp {
     const findings = optFindings || [];
     const effectiveCsp = this.clone();
+    effectiveCsp.version = cspVersion;
+
+    // Remove directives that are not supported in the given CSP version.
+    if (cspVersion < Version.CSP3) {
+      // Remove CSP3 directives from pre-CSP3 policies.
+      // https://w3c.github.io/webappsec-csp/#changes-from-level-2
+      delete effectiveCsp.directives[Directive.REPORT_TO];
+      delete effectiveCsp.directives[Directive.WORKER_SRC];
+      delete effectiveCsp.directives[Directive.MANIFEST_SRC];
+      delete effectiveCsp.directives[Directive.TRUSTED_TYPES];
+      delete effectiveCsp.directives[Directive.REQUIRE_TRUSTED_TYPES_FOR];
+      delete effectiveCsp.directives[Directive.SCRIPT_SRC_ATTR];
+      delete effectiveCsp.directives[Directive.SCRIPT_SRC_ELEM];
+      delete effectiveCsp.directives[Directive.STYLE_SRC_ATTR];
+      delete effectiveCsp.directives[Directive.STYLE_SRC_ELEM];
+    }
+    if (cspVersion < Version.CSP2) {
+      // child-src was only introduced in CSP2. In CSP1 workers are governed
+      // by script-src and frames by frame-src.
+      delete effectiveCsp.directives[Directive.CHILD_SRC];
+    }
+
+    // Normalize script directives, i.e. drop directive values that are not
+    // supported or are deactivated in the given CSP version. Every effective
+    // (i.e. fallback-resolved) directive is normalized exactly once, even if
+    // several directives fall back to it (e.g. script-src-elem -> script-src
+    // -> default-src).
+    const normalizedDirectives = new Set<string>();
     [Directive.SCRIPT_SRC, Directive.SCRIPT_SRC_ATTR, Directive.SCRIPT_SRC_ELEM]
         .forEach(directiveToNormalize => {
           const directive = effectiveCsp.getEffectiveDirective(
-                                directiveToNormalize) as Directive;
+              directiveToNormalize, cspVersion) as Directive;
+          if (normalizedDirectives.has(directive)) {
+            return;
+          }
+          normalizedDirectives.add(directive);
+
           const values = this.directives[directive] || [];
           const effectiveCspValues = effectiveCsp.directives[directive];
 
@@ -138,50 +188,42 @@ export class Csp {
           }
         });
 
-    if (cspVersion < Version.CSP3) {
-      // Remove CSP3 directives from pre-CSP3 policies.
-      // https://w3c.github.io/webappsec-csp/#changes-from-level-2
-      delete effectiveCsp.directives[Directive.REPORT_TO];
-      delete effectiveCsp.directives[Directive.WORKER_SRC];
-      delete effectiveCsp.directives[Directive.MANIFEST_SRC];
-      delete effectiveCsp.directives[Directive.TRUSTED_TYPES];
-      delete effectiveCsp.directives[Directive.REQUIRE_TRUSTED_TYPES_FOR];
-      delete effectiveCsp.directives[Directive.SCRIPT_SRC_ATTR];
-      delete effectiveCsp.directives[Directive.SCRIPT_SRC_ELEM];
-      delete effectiveCsp.directives[Directive.STYLE_SRC_ATTR];
-      delete effectiveCsp.directives[Directive.STYLE_SRC_ELEM];
+    // Record the provenance of every directive of the effective policy graph,
+    // i.e. which directive of the original policy governs it (after applying
+    // the fallback chain) in this CSP version.
+    for (const directive of Object.values(Directive)) {
+      const source = effectiveCsp.getEffectiveDirective(directive, cspVersion);
+      if (source in effectiveCsp.directives) {
+        effectiveCsp.directiveSources[directive] = source;
+      }
     }
 
     return effectiveCsp;
   }
 
   /**
-   * Returns default-src if directive is a fetch directive and is not present in
-   * this CSP. Otherwise the provided directive is returned.
+   * Returns the directive that governs the provided directive in this CSP,
+   * following the fallback chain of the given CSP version (e.g. worker-src ->
+   * child-src -> script-src -> default-src in CSP3). Falls back to default-src
+   * for fetch directives. Non-fetch directives don't fall back.
+   * If no version is passed, the version of this CSP is used (CSP3 for
+   * policies that were not specialized via getEffectiveCsp()).
    * @param directive CSP.
+   * @param cspVersion CSP version whose fallback chain should be used.
    * @return The effective directive.
    */
-  getEffectiveDirective(directive: string): string {
-    if (directive in this.directives) {
-      return directive;
+  getEffectiveDirective(directive: string, cspVersion?: Version): string {
+    const version = cspVersion || this.version || Version.CSP3;
+    const chain =
+        getDirectiveFallbackChain(directive as Directive, version);
+    for (const candidate of chain) {
+      if (candidate in this.directives) {
+        return candidate;
+      }
     }
-
-    if ((directive === Directive.SCRIPT_SRC_ATTR ||
-         directive === Directive.SCRIPT_SRC_ELEM) &&
-        Directive.SCRIPT_SRC in this.directives) {
-      return Directive.SCRIPT_SRC;
-    }
-    if ((directive === Directive.STYLE_SRC_ATTR ||
-         directive === Directive.STYLE_SRC_ELEM) &&
-        Directive.STYLE_SRC in this.directives) {
-      return Directive.STYLE_SRC;
-    }
-
-    // Only fetch directives default to default-src.
-    if (FETCH_DIRECTIVES.includes(directive as Directive)) {
-      return Directive.DEFAULT_SRC;
-    }
-    return directive;
+    // The last entry of the chain is default-src for fetch directives and the
+    // directive itself for non-fetch directives.
+    return chain[chain.length - 1];
   }
 
   /**
@@ -336,6 +378,71 @@ export enum Version {
   CSP1 = 1,
   CSP2,
   CSP3
+}
+
+
+/**
+ * Returns the fallback chain of a directive for a given CSP version.
+ * The chain starts with the directive that governs the resource type in the
+ * given CSP version and ends with default-src (for fetch directives).
+ * Directives that don't exist in the given CSP version are resolved to the
+ * directive that governs the same resource type in that version (e.g.
+ * worker-src is governed by child-src in CSP2 and by script-src in CSP1).
+ * https://w3c.github.io/webappsec-csp/#directive-fallback-list
+ * @param directive CSP directive.
+ * @param cspVersion CSP version.
+ * @return The fallback chain of the directive.
+ */
+export function getDirectiveFallbackChain(
+    directive: Directive, cspVersion: Version): Directive[] {
+  switch (directive) {
+    case Directive.SCRIPT_SRC_ATTR:
+    case Directive.SCRIPT_SRC_ELEM:
+      // script-src-attr/elem were introduced in CSP3. Before that script-src
+      // governs inline script elements and event handler attributes.
+      return cspVersion >= Version.CSP3 ?
+          [directive, Directive.SCRIPT_SRC, Directive.DEFAULT_SRC] :
+          [Directive.SCRIPT_SRC, Directive.DEFAULT_SRC];
+    case Directive.STYLE_SRC_ATTR:
+    case Directive.STYLE_SRC_ELEM:
+      return cspVersion >= Version.CSP3 ?
+          [directive, Directive.STYLE_SRC, Directive.DEFAULT_SRC] :
+          [Directive.STYLE_SRC, Directive.DEFAULT_SRC];
+    case Directive.WORKER_SRC:
+      if (cspVersion >= Version.CSP3) {
+        return [
+          Directive.WORKER_SRC, Directive.CHILD_SRC, Directive.SCRIPT_SRC,
+          Directive.DEFAULT_SRC
+        ];
+      }
+      if (cspVersion === Version.CSP2) {
+        // In CSP2 workers are governed by child-src, falling back to
+        // script-src.
+        return [
+          Directive.CHILD_SRC, Directive.SCRIPT_SRC, Directive.DEFAULT_SRC
+        ];
+      }
+      // In CSP1 workers are governed by script-src.
+      return [Directive.SCRIPT_SRC, Directive.DEFAULT_SRC];
+    case Directive.CHILD_SRC:
+      // child-src was introduced in CSP2.
+      return cspVersion >= Version.CSP2 ?
+          [Directive.CHILD_SRC, Directive.DEFAULT_SRC] :
+          [Directive.DEFAULT_SRC];
+    case Directive.FRAME_SRC:
+      return cspVersion >= Version.CSP2 ?
+          [Directive.FRAME_SRC, Directive.CHILD_SRC, Directive.DEFAULT_SRC] :
+          [Directive.FRAME_SRC, Directive.DEFAULT_SRC];
+    case Directive.DEFAULT_SRC:
+      return [Directive.DEFAULT_SRC];
+    default:
+      // Other fetch directives fall back to default-src, non-fetch directives
+      // don't fall back.
+      if (FETCH_DIRECTIVES.includes(directive)) {
+        return [directive, Directive.DEFAULT_SRC];
+      }
+      return [directive];
+  }
 }
 
 

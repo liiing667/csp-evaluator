@@ -76,12 +76,6 @@ export class CspEvaluator {
     this.findings = [];
     const checks = effectiveCspChecks || DEFAULT_CHECKS;
 
-    // We're applying checks on the policy as it would be seen by a browser
-    // supporting a specific version of CSP.
-    // For example a browser supporting only CSP1 will ignore nonces and
-    // therefore 'unsafe-inline' would not get ignored if a policy has nonces.
-    const effectiveCsp = this.csp.getEffectiveCsp(this.version, this.findings);
-
     // Checks independent of CSP version.
     if (parsedCspChecks) {
       for (const check of parsedCspChecks) {
@@ -90,9 +84,26 @@ export class CspEvaluator {
     }
 
     // Checks dependent on CSP version.
-    for (const check of checks) {
-      this.findings = this.findings.concat(check(effectiveCsp));
+    // The same policy is evaluated as it would be seen by browsers supporting
+    // different versions of CSP (up to the configured version), because the
+    // effective policy differs per version. For example a browser supporting
+    // only CSP1 will ignore nonces and therefore 'unsafe-inline' would not
+    // get ignored if a policy has nonces. Findings are deduplicated across
+    // versions.
+    const effectiveFindings: Finding[] = [];
+    for (let version = Version.CSP1; version <= this.version; version++) {
+      const versionFindings: Finding[] = [];
+      const effectiveCsp = this.csp.getEffectiveCsp(version, versionFindings);
+      for (const check of checks) {
+        versionFindings.push(...check(effectiveCsp));
+      }
+      for (const finding of versionFindings) {
+        if (!effectiveFindings.some((f) => f.equals(finding))) {
+          effectiveFindings.push(finding);
+        }
+      }
     }
+    this.findings = this.findings.concat(effectiveFindings);
 
     return this.findings;
   }

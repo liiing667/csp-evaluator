@@ -138,6 +138,103 @@ describe('Test Csp', () => {
     expect(style).toBe(Directive.DEFAULT_SRC);
   });
 
+  it('GetEffectiveDirectiveFallbackChains', () => {
+    const testCsp =
+        'default-src \'none\'; script-src \'self\'; child-src child.example';
+    const parsed = (new CspParser(testCsp)).csp;
+
+    // script-src-elem/attr fall back to script-src, then default-src (CSP3).
+    expect(parsed.getEffectiveDirective(Directive.SCRIPT_SRC_ELEM))
+        .toBe(Directive.SCRIPT_SRC);
+    expect(parsed.getEffectiveDirective(Directive.SCRIPT_SRC_ATTR))
+        .toBe(Directive.SCRIPT_SRC);
+
+    // worker-src falls back to child-src, then script-src, then default-src.
+    expect(parsed.getEffectiveDirective(Directive.WORKER_SRC))
+        .toBe(Directive.CHILD_SRC);
+    // frame-src falls back to child-src, then default-src.
+    expect(parsed.getEffectiveDirective(Directive.FRAME_SRC))
+        .toBe(Directive.CHILD_SRC);
+
+    const noChildSrc = (new CspParser('default-src \'none\'; script-src \'self\'')).csp;
+    expect(noChildSrc.getEffectiveDirective(Directive.WORKER_SRC))
+        .toBe(Directive.SCRIPT_SRC);
+    expect(noChildSrc.getEffectiveDirective(Directive.FRAME_SRC))
+        .toBe(Directive.DEFAULT_SRC);
+  });
+
+  it('GetEffectiveDirectiveFallbackChainsPerVersion', () => {
+    const testCsp =
+        'default-src \'none\'; script-src \'self\'; child-src child.example; ' +
+        'worker-src worker.example; script-src-elem elem.example';
+    const parsed = (new CspParser(testCsp)).csp;
+
+    // CSP3: directives are governed by themselves.
+    expect(parsed.getEffectiveDirective(Directive.WORKER_SRC, Version.CSP3))
+        .toBe(Directive.WORKER_SRC);
+    expect(parsed.getEffectiveDirective(Directive.SCRIPT_SRC_ELEM, Version.CSP3))
+        .toBe(Directive.SCRIPT_SRC_ELEM);
+
+    // CSP2: worker-src and script-src-elem don't exist. Workers are governed
+    // by child-src (then script-src), script elements by script-src.
+    expect(parsed.getEffectiveDirective(Directive.WORKER_SRC, Version.CSP2))
+        .toBe(Directive.CHILD_SRC);
+    expect(parsed.getEffectiveDirective(Directive.SCRIPT_SRC_ELEM, Version.CSP2))
+        .toBe(Directive.SCRIPT_SRC);
+
+    // CSP1: child-src doesn't exist either. Workers are governed by
+    // script-src.
+    expect(parsed.getEffectiveDirective(Directive.WORKER_SRC, Version.CSP1))
+        .toBe(Directive.SCRIPT_SRC);
+    expect(parsed.getEffectiveDirective(Directive.CHILD_SRC, Version.CSP1))
+        .toBe(Directive.DEFAULT_SRC);
+  });
+
+  it('GetEffectiveCspKeepsDirectiveSources', () => {
+    const testCsp =
+        'default-src \'none\'; script-src \'self\'; child-src child.example';
+    const parsed = (new CspParser(testCsp)).csp;
+
+    const effectiveCsp = parsed.getEffectiveCsp(Version.CSP3);
+    expect(effectiveCsp.version).toBe(Version.CSP3);
+    // Explicitly set directives are their own source.
+    expect(effectiveCsp.directiveSources[Directive.SCRIPT_SRC])
+        .toBe(Directive.SCRIPT_SRC);
+    // Directives that fall back record the directive they inherit from.
+    expect(effectiveCsp.directiveSources[Directive.SCRIPT_SRC_ELEM])
+        .toBe(Directive.SCRIPT_SRC);
+    expect(effectiveCsp.directiveSources[Directive.SCRIPT_SRC_ATTR])
+        .toBe(Directive.SCRIPT_SRC);
+    expect(effectiveCsp.directiveSources[Directive.WORKER_SRC])
+        .toBe(Directive.CHILD_SRC);
+    expect(effectiveCsp.directiveSources[Directive.FRAME_SRC])
+        .toBe(Directive.CHILD_SRC);
+    expect(effectiveCsp.directiveSources[Directive.IMG_SRC])
+        .toBe(Directive.DEFAULT_SRC);
+
+    // In CSP1 child-src is not supported, workers are governed by script-src.
+    const effectiveCsp1 = parsed.getEffectiveCsp(Version.CSP1);
+    expect(effectiveCsp1.version).toBe(Version.CSP1);
+    expect(effectiveCsp1.directiveSources[Directive.WORKER_SRC])
+        .toBe(Directive.SCRIPT_SRC);
+  });
+
+  it('GetEffectiveCspNormalizesFallbackDirectiveOnlyOnce', () => {
+    // script-src-attr and script-src-elem fall back to script-src. The
+    // strict-dynamic allowlist entries of script-src must only be reported
+    // as ignored once.
+    const testCsp =
+        'script-src \'nonce-12345678\' \'strict-dynamic\' foo.bar';
+    const parsed = (new CspParser(testCsp)).csp;
+    const findings: Finding[] = [];
+    parsed.getEffectiveCsp(Version.CSP3, findings);
+
+    expect(findings.length).toBe(1);
+    expect(findings[0].type).toBe(Type.IGNORED);
+    expect(findings[0].directive).toBe(Directive.SCRIPT_SRC);
+    expect(findings[0].value).toBe('foo.bar');
+  });
+
 
   it('GetEffectiveDirectives', () => {
     const testCsp = 'default-src https:; script-src foo.bar';
