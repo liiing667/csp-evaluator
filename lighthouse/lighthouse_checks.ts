@@ -7,7 +7,7 @@ import {CheckerFunction} from '../checks/checker';
 import {checkInvalidKeyword, checkMissingSemicolon, checkUnknownDirective} from '../checks/parser_checks';
 import {checkDeprecatedDirective, checkMissingObjectSrcDirective, checkMissingScriptSrcDirective, checkMultipleMissingBaseUriDirective, checkNonceLength, checkPlainUrlSchemes, checkScriptUnsafeInline, checkWildcards} from '../checks/security_checks';
 import {checkAllowlistFallback, checkStrictDynamic, checkUnsafeInlineFallback} from '../checks/strictcsp_checks';
-import {Csp, Directive, Version} from '../csp';
+import {Csp, Version} from '../csp';
 import {Finding} from '../finding';
 
 interface Equalable {
@@ -95,8 +95,12 @@ export function evaluateForFailure(parsedCsps: Csp[]): Finding[] {
   const effectiveCsps =
       parsedCsps.map(csp => csp.getEffectiveCsp(Version.CSP3));
   const effectiveCspsWithScript = effectiveCsps.filter(csp => {
-    const directiveName = csp.getEffectiveDirective(Directive.SCRIPT_SRC);
-    return csp.directives[directiveName];
+    // A policy can target scripts via script-src, script-src-elem or
+    // script-src-attr (with script-src/default-src acting as fallbacks).
+    // Only skip policies that do not configure any script directive at all;
+    // element and attribute contexts are still checked independently.
+    return csp.getEffectiveScriptDirectives()
+        .some(directiveName => csp.directives[directiveName]);
   });
   const robust = [
     ...atLeastOnePasses(effectiveCspsWithScript, checkStrictDynamic),

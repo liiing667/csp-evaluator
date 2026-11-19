@@ -250,6 +250,41 @@ describe('Test evaluateForFailure', () => {
         .toBe(
             `https: URI in object-src allows the execution of unsafe scripts.`);
   });
+
+  it('strict script-src-elem does not make script-src allowlist robust', () => {
+    // script-src-elem is a strict nonce + strict-dynamic policy, but the
+    // bypassable script-src allowlist still controls event handlers. The
+    // policy must not pass as a single strict policy.
+    const policies = [
+      `script-src https://cdn.example.com 'unsafe-inline'; ` +
+          `script-src-elem 'nonce-abcdef12345' 'strict-dynamic'; ` +
+          `object-src 'none'; base-uri 'none'`
+    ];
+
+    const violations =
+        lighthouseChecks.evaluateForFailure(parsePolicies(policies));
+
+    const directives = violations.map(f => f.directive);
+    expect(directives).toContain('script-src');
+    expect(violations.some(
+               f => f.description.includes(
+                   'Host allowlists can frequently be bypassed')))
+        .toBeTrue();
+  });
+
+  it('robust split nonce policy with script-src-elem and script-src-attr',
+     () => {
+       const policies = [
+         `script-src 'none'; ` +
+             `script-src-elem 'nonce-abcdef12345' 'strict-dynamic'; ` +
+             `script-src-attr 'none'; object-src 'none'; base-uri 'none'`
+       ];
+
+       const violations =
+           lighthouseChecks.evaluateForFailure(parsePolicies(policies));
+
+       expect(violations.length).toBe(0);
+     });
 });
 describe('Test evaluateForWarnings', () => {
   it('perfect', () => {

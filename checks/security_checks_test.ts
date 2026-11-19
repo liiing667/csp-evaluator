@@ -227,6 +227,15 @@ describe('Test security checks', () => {
     expect(violations[0].severity).toBe(Severity.HIGH);
   });
 
+  it('CheckMissingDirectivesScriptSrcCoveredByElemAndAttr', () => {
+    const test =
+        'script-src-elem \'nonce-abcdef12345\' \'strict-dynamic\'; ' +
+        'script-src-attr \'none\'; object-src \'none\'; base-uri \'none\'';
+
+    const violations = checkCsp(test, securityChecks.checkMissingDirectives);
+    expect(violations.length).toBe(0);
+  });
+
   it('CheckMissingDirectivesObjectSrcSelf', () => {
     const test = 'object-src \'self\'';
 
@@ -241,6 +250,30 @@ describe('Test security checks', () => {
     const violations = checkCsp(test, securityChecks.checkMissingDirectives);
     expect(violations.length).toBe(1);
     expect(violations[0].severity).toBe(Severity.HIGH);
+  });
+
+  it('CheckMissingDirectivesMissingBaseUriInScriptSrcElemNonceCsp', () => {
+    // A nonce chain in script-src-elem must also require base-uri even if
+    // script-src itself only contains a host allowlist.
+    const test =
+        'script-src https://cdn.example.com; ' +
+        'script-src-elem \'nonce-abcdef12345\' \'strict-dynamic\'; ' +
+        'object-src \'none\'';
+
+    const violations = checkCsp(test, securityChecks.checkMissingDirectives);
+    expect(violations.length).toBe(1);
+    expect(violations[0].severity).toBe(Severity.HIGH);
+    expect(violations[0].directive).toBe(Directive.BASE_URI);
+  });
+
+  it('CheckMissingDirectivesBaseUriSetForScriptSrcElemNonceCsp', () => {
+    const test =
+        'script-src https://cdn.example.com; ' +
+        'script-src-elem \'nonce-abcdef12345\' \'strict-dynamic\'; ' +
+        'object-src \'none\'; base-uri \'none\'';
+
+    const violations = checkCsp(test, securityChecks.checkMissingDirectives);
+    expect(violations.length).toBe(0);
   });
 
   it('CheckMissingDirectivesMissingBaseUriInHashWStrictDynamicCsp', () => {

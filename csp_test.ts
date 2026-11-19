@@ -236,6 +236,44 @@ describe('Test Csp', () => {
     expect(parsed.policyHasStrictDynamic()).toBeFalse();
   });
 
+  it('ScriptContextsResolveIndependently', () => {
+    const testCsp =
+        'script-src foo.bar; script-src-elem \'nonce-abcdef12345\' ' +
+        '\'strict-dynamic\'';
+    const parsed = (new CspParser(testCsp)).csp;
+
+    // Element scripts are governed by the strict script-src-elem directive.
+    expect(parsed.getEffectiveScriptElemDirective())
+        .toBe(Directive.SCRIPT_SRC_ELEM);
+    expect(parsed.policyHasScriptElemNonces()).toBeTrue();
+    expect(parsed.policyHasScriptElemStrictDynamic()).toBeTrue();
+
+    // Event handlers fall back to script-src and must not inherit the nonce
+    // or strict-dynamic configured in script-src-elem.
+    expect(parsed.getEffectiveScriptAttrDirective())
+        .toBe(Directive.SCRIPT_SRC);
+    expect(parsed.policyHasScriptAttrNonces()).toBeFalse();
+    expect(parsed.policyHasScriptAttrStrictDynamic()).toBeFalse();
+
+    expect(parsed.getEffectiveScriptDirectives()).toEqual([
+      Directive.SCRIPT_SRC_ELEM, Directive.SCRIPT_SRC
+    ]);
+  });
+
+  it('ScriptContextsFallBackToDefaultSrc', () => {
+    const testCsp = 'default-src \'nonce-abcdef12345\'';
+    const parsed = (new CspParser(testCsp)).csp;
+
+    expect(parsed.getEffectiveScriptElemDirective())
+        .toBe(Directive.DEFAULT_SRC);
+    expect(parsed.getEffectiveScriptAttrDirective())
+        .toBe(Directive.DEFAULT_SRC);
+    expect(parsed.getEffectiveScriptDirectives())
+        .toEqual([Directive.DEFAULT_SRC]);
+    expect(parsed.policyHasScriptElemNonces()).toBeTrue();
+    expect(parsed.policyHasScriptAttrNonces()).toBeTrue();
+  });
+
 
   it('IsDirective', () => {
     const directives = Object.keys(Directive).map(

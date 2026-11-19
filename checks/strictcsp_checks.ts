@@ -33,6 +33,53 @@ import {Finding, Severity, Type} from '../finding';
 
 
 /**
+ * A script execution context that has to be evaluated independently.
+ *
+ * Element scripts (<script> elements and externally loaded scripts) are
+ * governed by script-src-elem, while inline event handlers and javascript:
+ * navigation are governed by script-src-attr. script-src and default-src only
+ * act as fallbacks. Trust (nonces, hashes and 'strict-dynamic') never
+ * propagates between these contexts.
+ */
+interface ScriptContext {
+  directive: string;
+  values: string[];
+  hasNonceOrHash: boolean;
+  hasStrictDynamic: boolean;
+}
+
+/**
+ * Returns the independent element-script and event-handler contexts.
+ */
+function getScriptContexts(parsedCsp: Csp): ScriptContext[] {
+  const elemDirective = parsedCsp.getEffectiveScriptElemDirective();
+  const attrDirective = parsedCsp.getEffectiveScriptAttrDirective();
+
+  const contexts: ScriptContext[] = [{
+    directive: elemDirective,
+    values: parsedCsp.directives[elemDirective] || [],
+    hasNonceOrHash: parsedCsp.policyHasScriptElemNonces() ||
+        parsedCsp.policyHasScriptElemHashes(),
+    hasStrictDynamic: parsedCsp.policyHasScriptElemStrictDynamic(),
+  }];
+
+  // If both contexts fall back to the same directive (e.g. only script-src or
+  // default-src is present), evaluate it only once.
+  if (attrDirective !== elemDirective) {
+    contexts.push({
+      directive: attrDirective,
+      values: parsedCsp.directives[attrDirective] || [],
+      hasNonceOrHash: parsedCsp.policyHasScriptAttrNonces() ||
+          parsedCsp.policyHasScriptAttrHashes(),
+      hasStrictDynamic: parsedCsp.policyHasScriptAttrStrictDynamic(),
+    });
+  }
+
+  return contexts;
+}
+
+
+/**
  * Checks if 'strict-dynamic' is present.
  *
  * Example policy where this check would trigger:
@@ -41,22 +88,26 @@ import {Finding, Severity, Type} from '../finding';
  * @param parsedCsp A parsed csp.
  */
 export function checkStrictDynamic(parsedCsp: Csp): Finding[] {
-  const directiveName =
-      parsedCsp.getEffectiveDirective(csp.Directive.SCRIPT_SRC);
-  const values: string[] = parsedCsp.directives[directiveName] || [];
+  const violations: Finding[] = [];
 
-  const schemeOrHostPresent = values.some((v) => !v.startsWith('\''));
+  for (const context of getScriptContexts(parsedCsp)) {
+    const schemeOrHostPresent =
+        context.values.some((v) => !v.startsWith('\''));
 
-  // Check if strict-dynamic is present in case a host/scheme allowlist is used.
-  if (schemeOrHostPresent && !values.includes(Keyword.STRICT_DYNAMIC)) {
-    return [new Finding(
-        Type.STRICT_DYNAMIC,
-        'Host allowlists can frequently be bypassed. Consider using ' +
-            '\'strict-dynamic\' in combination with CSP nonces or hashes.',
-        Severity.STRICT_CSP, directiveName)];
+    // A host/scheme allowlist is only rendered ineffective by 'strict-dynamic'
+    // that is present in the very same directive. 'strict-dynamic' configured
+    // in script-src-elem does not neutralize host sources in script-src, so
+    // each context is evaluated independently.
+    if (schemeOrHostPresent && !context.hasStrictDynamic) {
+      violations.push(new Finding(
+          Type.STRICT_DYNAMIC,
+          'Host allowlists can frequently be bypassed. Consider using ' +
+              '\'strict-dynamic\' in combination with CSP nonces or hashes.',
+          Severity.STRICT_CSP, context.directive));
+    }
   }
 
-  return [];
+  return violations;
 }
 
 
@@ -69,20 +120,18 @@ export function checkStrictDynamic(parsedCsp: Csp): Finding[] {
  * @param parsedCsp A parsed csp.
  */
 export function checkStrictDynamicNotStandalone(parsedCsp: Csp): Finding[] {
-  const directiveName =
-      parsedCsp.getEffectiveDirective(csp.Directive.SCRIPT_SRC);
-  const values: string[] = parsedCsp.directives[directiveName] || [];
+  const violations: Finding[] = [];
 
-  if (values.includes(Keyword.STRICT_DYNAMIC) &&
-      (!parsedCsp.policyHasScriptNonces() &&
-       !parsedCsp.policyHasScriptHashes())) {
-    return [new Finding(
-        Type.STRICT_DYNAMIC_NOT_STANDALONE,
-        '\'strict-dynamic\' without a CSP nonce/hash will block all scripts.',
-        Severity.INFO, directiveName)];
+  for (const context of getScriptContexts(parsedCsp)) {
+    if (context.hasStrictDynamic && !context.hasNonceOrHash) {
+      violations.push(new Finding(
+          Type.STRICT_DYNAMIC_NOT_STANDALONE,
+          '\'strict-dynamic\' without a CSP nonce/hash will block all scripts.',
+          Severity.INFO, context.directive));
+    }
   }
 
-  return [];
+  return violations;
 }
 
 
@@ -97,24 +146,23 @@ export function checkStrictDynamicNotStandalone(parsedCsp: Csp): Finding[] {
  * @param parsedCsp A parsed csp.
  */
 export function checkUnsafeInlineFallback(parsedCsp: Csp): Finding[] {
-  if (!parsedCsp.policyHasScriptNonces() &&
-      !parsedCsp.policyHasScriptHashes()) {
-    return [];
+  const violations: Finding[] = [];
+
+  for (const context of getScriptContexts(parsedCsp)) {
+    if (!context.hasNonceOrHash) {
+      continue;
+    }
+
+    if (!context.values.includes(Keyword.UNSAFE_INLINE)) {
+      violations.push(new Finding(
+          Type.UNSAFE_INLINE_FALLBACK,
+          'Consider adding \'unsafe-inline\' (ignored by browsers supporting ' +
+              'nonces/hashes) to be backward compatible with older browsers.',
+          Severity.STRICT_CSP, context.directive));
+    }
   }
 
-  const directiveName =
-      parsedCsp.getEffectiveDirective(csp.Directive.SCRIPT_SRC);
-  const values: string[] = parsedCsp.directives[directiveName] || [];
-
-  if (!values.includes(Keyword.UNSAFE_INLINE)) {
-    return [new Finding(
-        Type.UNSAFE_INLINE_FALLBACK,
-        'Consider adding \'unsafe-inline\' (ignored by browsers supporting ' +
-            'nonces/hashes) to be backward compatible with older browsers.',
-        Severity.STRICT_CSP, directiveName)];
-  }
-
-  return [];
+  return violations;
 }
 
 
@@ -130,26 +178,29 @@ export function checkUnsafeInlineFallback(parsedCsp: Csp): Finding[] {
  * @param parsedCsp A parsed csp.
  */
 export function checkAllowlistFallback(parsedCsp: Csp): Finding[] {
-  const directiveName =
-      parsedCsp.getEffectiveDirective(csp.Directive.SCRIPT_SRC);
-  const values: string[] = parsedCsp.directives[directiveName] || [];
+  const violations: Finding[] = [];
 
-  if (!values.includes(Keyword.STRICT_DYNAMIC)) {
-    return [];
+  for (const context of getScriptContexts(parsedCsp)) {
+    if (!context.hasStrictDynamic) {
+      continue;
+    }
+
+    // Check if there's already an allowlist (url scheme or url) in the same
+    // directive. Fallbacks only make sense for the directive whose
+    // 'strict-dynamic' actually ignores them.
+    if (!context.values.some(
+            (v) => ['http:', 'https:', '*'].includes(v) ||
+                v.includes('.'))) {
+      violations.push(new Finding(
+          Type.ALLOWLIST_FALLBACK,
+          'Consider adding https: and http: url schemes (ignored by browsers ' +
+              'supporting \'strict-dynamic\') to be backward compatible with ' +
+              'older browsers.',
+          Severity.STRICT_CSP, context.directive));
+    }
   }
 
-  // Check if there's already an allowlist (url scheme or url)
-  if (!values.some(
-          (v) => ['http:', 'https:', '*'].includes(v) || v.includes('.'))) {
-    return [new Finding(
-        Type.ALLOWLIST_FALLBACK,
-        'Consider adding https: and http: url schemes (ignored by browsers ' +
-            'supporting \'strict-dynamic\') to be backward compatible with older ' +
-            'browsers.',
-        Severity.STRICT_CSP, directiveName)];
-  }
-
-  return [];
+  return violations;
 }
 
 

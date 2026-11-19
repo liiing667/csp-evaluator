@@ -197,6 +197,58 @@ export class Csp {
   }
 
   /**
+   * Returns the directive that governs <script> elements and externally
+   * loaded scripts.
+   *
+   * script-src-elem takes precedence over script-src, which itself takes
+   * precedence over default-src. A nonce, hash or 'strict-dynamic' configured
+   * in script-src-elem never propagates to script-src and vice versa.
+   * @return The effective directive for element scripts.
+   */
+  getEffectiveScriptElemDirective(): string {
+    if (Directive.SCRIPT_SRC_ELEM in this.directives) {
+      return Directive.SCRIPT_SRC_ELEM;
+    }
+    if (Directive.SCRIPT_SRC in this.directives) {
+      return Directive.SCRIPT_SRC;
+    }
+    return Directive.DEFAULT_SRC;
+  }
+
+  /**
+   * Returns the directive that governs inline event handlers and
+   * javascript: navigation.
+   *
+   * script-src-attr takes precedence over script-src, which itself takes
+   * precedence over default-src. A nonce, hash or 'strict-dynamic' configured
+   * in script-src-elem never propagates to script-src-attr and vice versa.
+   * @return The effective directive for event handler attributes.
+   */
+  getEffectiveScriptAttrDirective(): string {
+    if (Directive.SCRIPT_SRC_ATTR in this.directives) {
+      return Directive.SCRIPT_SRC_ATTR;
+    }
+    if (Directive.SCRIPT_SRC in this.directives) {
+      return Directive.SCRIPT_SRC;
+    }
+    return Directive.DEFAULT_SRC;
+  }
+
+  /**
+   * Returns the distinct directives that actually govern element scripts and
+   * inline event handlers. The two contexts must be evaluated independently,
+   * so a policy that only defines script-src-elem is not treated as if it had
+   * no script policy at all.
+   * @return The effective directives of both script execution contexts.
+   */
+  getEffectiveScriptDirectives(): string[] {
+    return [...new Set([
+      this.getEffectiveScriptElemDirective(),
+      this.getEffectiveScriptAttrDirective()
+    ])];
+  }
+
+  /**
    * Checks if this CSP is using nonces for scripts.
    * @return true, if this CSP is using script nonces.
    */
@@ -204,6 +256,30 @@ export class Csp {
     const directiveName =
         this.getEffectiveDirective(directive || Directive.SCRIPT_SRC);
     const values = this.directives[directiveName] || [];
+    return values.some((val) => isNonce(val, true));
+  }
+
+  /**
+   * Checks if the directive governing <script> elements is using nonces.
+   * Nonces configured in script-src-elem do not apply to event handlers and
+   * therefore do not count for script-src-attr/script-src.
+   * @return true, if the element script directive is using script nonces.
+   */
+  policyHasScriptElemNonces(): boolean {
+    const values =
+        this.directives[this.getEffectiveScriptElemDirective()] || [];
+    return values.some((val) => isNonce(val, true));
+  }
+
+  /**
+   * Checks if the directive governing inline event handlers is using nonces.
+   * Nonces configured in script-src-elem do not apply to event handlers and
+   * therefore do not count for this check.
+   * @return true, if the event handler directive is using script nonces.
+   */
+  policyHasScriptAttrNonces(): boolean {
+    const values =
+        this.directives[this.getEffectiveScriptAttrDirective()] || [];
     return values.some((val) => isNonce(val, true));
   }
 
@@ -219,6 +295,26 @@ export class Csp {
   }
 
   /**
+   * Checks if the directive governing <script> elements is using hashes.
+   * @return true, if the element script directive is using script hashes.
+   */
+  policyHasScriptElemHashes(): boolean {
+    const values =
+        this.directives[this.getEffectiveScriptElemDirective()] || [];
+    return values.some((val) => isHash(val, true));
+  }
+
+  /**
+   * Checks if the directive governing inline event handlers is using hashes.
+   * @return true, if the event handler directive is using script hashes.
+   */
+  policyHasScriptAttrHashes(): boolean {
+    const values =
+        this.directives[this.getEffectiveScriptAttrDirective()] || [];
+    return values.some((val) => isHash(val, true));
+  }
+
+  /**
    * Checks if this CSP is using strict-dynamic.
    * @return true, if this CSP is using CSP nonces.
    */
@@ -226,6 +322,31 @@ export class Csp {
     const directiveName =
         this.getEffectiveDirective(directive || Directive.SCRIPT_SRC);
     const values = this.directives[directiveName] || [];
+    return values.includes(Keyword.STRICT_DYNAMIC);
+  }
+
+  /**
+   * Checks if the directive governing <script> elements uses
+   * 'strict-dynamic'. 'strict-dynamic' only propagates trust to scripts
+   * loaded by already trusted scripts within the same directive context; it
+   * never makes host sources in script-src trustworthy.
+   * @return true, if the element script directive uses 'strict-dynamic'.
+   */
+  policyHasScriptElemStrictDynamic(): boolean {
+    const values =
+        this.directives[this.getEffectiveScriptElemDirective()] || [];
+    return values.includes(Keyword.STRICT_DYNAMIC);
+  }
+
+  /**
+   * Checks if the directive governing inline event handlers uses
+   * 'strict-dynamic'. Note that 'strict-dynamic' has no effect on inline
+   * event handlers, which can only be authorized via nonces/hashes.
+   * @return true, if the event handler directive uses 'strict-dynamic'.
+   */
+  policyHasScriptAttrStrictDynamic(): boolean {
+    const values =
+        this.directives[this.getEffectiveScriptAttrDirective()] || [];
     return values.includes(Keyword.STRICT_DYNAMIC);
   }
 }

@@ -197,8 +197,14 @@ export function checkMissingObjectSrcDirective(parsedCsp: Csp): Finding[] {
  * Checks if script-src is restricted either directly or via a default-src.
  */
 export function checkMissingScriptSrcDirective(parsedCsp: Csp): Finding[] {
-  if (Directive.SCRIPT_SRC in parsedCsp.directives ||
-      Directive.DEFAULT_SRC in parsedCsp.directives) {
+  // Scripts can also be restricted via the CSP3 script-src-elem and
+  // script-src-attr directives, so the policy only lacks a script restriction
+  // if none of the script directive contexts is configured.
+  const hasScriptDirective = parsedCsp.getEffectiveScriptDirectives()
+                                 .some(
+                                     directive =>
+                                         directive in parsedCsp.directives);
+  if (hasScriptDirective) {
     return [];
   }
   return [new Finding(
@@ -222,9 +228,16 @@ export function checkMultipleMissingBaseUriDirective(parsedCsps: Csp[]):
     Finding[] {
   // base-uri can be used to bypass nonce based CSPs and hash based CSPs that
   // use strict dynamic
-  const needsBaseUri = (csp: Csp) =>
-      (csp.policyHasScriptNonces() ||
-       (csp.policyHasScriptHashes() && csp.policyHasStrictDynamic()));
+  // Nonces, hashes and 'strict-dynamic' are evaluated per script execution
+  // context: a nonce chain in script-src-elem does not apply to the
+  // script-src-attr/script-src context and vice versa.
+  const needsBaseUri = (parsedCsp: Csp) =>
+      (parsedCsp.policyHasScriptElemNonces() ||
+       parsedCsp.policyHasScriptAttrNonces() ||
+       ((parsedCsp.policyHasScriptElemHashes() &&
+         parsedCsp.policyHasScriptElemStrictDynamic()) ||
+        (parsedCsp.policyHasScriptAttrHashes() &&
+         parsedCsp.policyHasScriptAttrStrictDynamic())));
   const hasBaseUri = (csp: Csp) => Directive.BASE_URI in csp.directives;
 
   if (parsedCsps.some(needsBaseUri) && !parsedCsps.some(hasBaseUri)) {
