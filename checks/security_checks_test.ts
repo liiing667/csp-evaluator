@@ -306,7 +306,7 @@ describe('Test security checks', () => {
 
   it('checkScriptAllowlistBypassJSONPBypassEvalRequired', () => {
     const test =
-        'script-src https://googletagmanager.com \'unsafe-eval\'; script-src-elem https://googletagmanager.com \'unsafe-eval\'';
+        'script-src https://*.googletagmanager.com \'unsafe-eval\'; script-src-elem https://*.googletagmanager.com \'unsafe-eval\'';
 
     const violations =
         checkCsp(test, securityChecks.checkScriptAllowlistBypass);
@@ -315,6 +315,9 @@ describe('Test security checks', () => {
   });
 
   it('checkScriptAllowlistBypassJSONPBypassEvalRequiredNotPresent', () => {
+    // The bare "googletagmanager.com" host must not match the bypass endpoint
+    // on the distinct "www.googletagmanager.com" label, so only the generic
+    // warning (rather than a concrete bypass) is reported.
     const test =
         'script-src https://googletagmanager.com; script-src-elem https://googletagmanager.com;';
 
@@ -336,6 +339,43 @@ describe('Test security checks', () => {
                (v) => v.description.includes(
                    'gstatic.com is known to host Angular libraries which')))
         .toBeTrue();
+  });
+
+  it('checkScriptAllowlistBypassRespectsExplicitPort', () => {
+    // The AngularJS bypass endpoint is served on the default https port. An
+    // explicit non-default port does not actually allow that endpoint.
+    const test =
+        'script-src https://gstatic.com:8443; script-src-elem https://gstatic.com:8443';
+
+    const violations =
+        checkCsp(test, securityChecks.checkScriptAllowlistBypass);
+    expect(violations.length).toBe(2);
+    expect(violations.every((v) => v.severity === Severity.MEDIUM_MAYBE))
+        .toBeTrue();
+  });
+
+  it('checkScriptAllowlistBypassRespectsPathBoundary', () => {
+    // A path restricted to a different prefix must not be widened to the whole
+    // host and therefore cannot hit the known bypass file.
+    const test =
+        "script-src https://gstatic.com/nonexistent-prefix/; script-src-elem https://gstatic.com/nonexistent-prefix/";
+
+    const violations =
+        checkCsp(test, securityChecks.checkScriptAllowlistBypass);
+    expect(violations.length).toBe(2);
+    expect(violations.every((v) => v.severity === Severity.MEDIUM_MAYBE))
+        .toBeTrue();
+  });
+
+  it('checkScriptAllowlistBypassMatchesDefaultPort', () => {
+    // An explicit default port is equivalent to omitting the port.
+    const test =
+        'script-src https://gstatic.com:443; script-src-elem https://gstatic.com:443';
+
+    const violations =
+        checkCsp(test, securityChecks.checkScriptAllowlistBypass);
+    expect(violations.length).toBe(2);
+    expect(violations.every((v) => v.severity === Severity.HIGH)).toBeTrue();
   });
 
   it('checkScriptAllowlistBypassNoBypassWarningOnly', () => {

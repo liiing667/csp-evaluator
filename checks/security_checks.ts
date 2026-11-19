@@ -300,11 +300,10 @@ export function checkScriptAllowlistBypass(parsedCsp: Csp): Finding[] {
             continue;
           }
 
-          const url = '//' + utils.getSchemeFreeUrl(value);
+          const angularBypass =
+              utils.matchWildcardUrls(value, angular.URLS);
 
-          const angularBypass = utils.matchWildcardUrls(url, angular.URLS);
-
-          let jsonpBypass = utils.matchWildcardUrls(url, jsonp.URLS);
+          let jsonpBypass = utils.matchWildcardUrls(value, jsonp.URLS);
 
           // Some JSONP bypasses only work in presence of unsafe-eval.
           if (jsonpBypass) {
@@ -376,8 +375,7 @@ export function checkFlashObjectAllowlistBypass(parsedCsp: Csp): Finding[] {
       return [];
     }
 
-    const url = '//' + utils.getSchemeFreeUrl(value);
-    const flashBypass = utils.matchWildcardUrls(url, flash.URLS);
+    const flashBypass = utils.matchWildcardUrls(value, flash.URLS);
 
     if (flashBypass) {
       violations.push(new Finding(

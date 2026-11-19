@@ -18,7 +18,8 @@
 
 import 'jasmine';
 
-import {getHostname, getSchemeFreeUrl, matchWildcardUrls} from './utils';
+import {getHostname, getSchemeFreeUrl, matchWildcardUrls,
+        parseSourceExpression} from './utils';
 
 const TEST_BYPASSES = [
   'https://googletagmanager.com/gtm/js', 'https://www.google.com/jsapi',
@@ -75,10 +76,123 @@ describe('Test Utils', () => {
     expect(match!.hostname).toBe('ajax.googleapis.com');
   });
 
-  it('MatchWildcardUrlsNoMatchHostWithoutPathWildcard', () => {
-    const hostWithPath = '//ajax.googleapis.com/ajax';
-    const match = matchWildcardUrls(hostWithPath, TEST_BYPASSES);
-    expect(match).toBeNull();
+  it('MatchWildcardUrlsPathMatchingFollowsPathPartSemantics', () => {
+    // A path without a trailing slash requires an exact path match.
+    expect(matchWildcardUrls(
+               '//ajax.googleapis.com/ajax',
+               TEST_BYPASSES))
+        .toBeNull();
+    // It matches when the endpoint path is identical.
+    expect(matchWildcardUrls(
+               '//www.google.com/jsapi',
+               TEST_BYPASSES)!.hostname)
+        .toBe('www.google.com');
+    // A trailing slash matches paths beneath the directory, but only across
+    // path segment boundaries.
+    expect(matchWildcardUrls(
+               '//ajax.googleapis.com/ajax/',
+               TEST_BYPASSES)!.hostname)
+        .toBe('ajax.googleapis.com');
+    expect(matchWildcardUrls(
+               '//ajax.googleapis.com/ajax-services/',
+               TEST_BYPASSES))
+        .toBeNull();
+  });
+
+  it('MatchWildcardUrlsSchemeIsMatched', () => {
+    // https does not match an http endpoint (no downgrade).
+    expect(matchWildcardUrls(
+               'https://www.google.com',
+               ['http://www.google.com/jsapi']))
+        .toBeNull();
+    // http allows secure upgrades to https.
+    expect(matchWildcardUrls(
+               'http://www.google.com',
+               ['https://www.google.com/jsapi'])!.hostname)
+        .toBe('www.google.com');
+  });
+
+  it('MatchWildcardUrlsSchemeRelativeSourceMatchesAnyScheme', () => {
+    expect(matchWildcardUrls(
+               '//www.google.com',
+               ['http://www.google.com/jsapi'])!.hostname)
+        .toBe('www.google.com');
+    expect(matchWildcardUrls(
+               '//www.google.com',
+               ['https://www.google.com/jsapi'])!.hostname)
+        .toBe('www.google.com');
+  });
+
+  it('MatchWildcardUrlsPortIsMatched', () => {
+    // An explicit port must match the endpoint's port (default aware).
+    expect(matchWildcardUrls(
+               '//www.google.com:8443',
+               ['https://www.google.com/jsapi']))
+        .toBeNull();
+    expect(matchWildcardUrls(
+               '//www.google.com:443',
+               ['https://www.google.com/jsapi'])!.hostname)
+        .toBe('www.google.com');
+    expect(matchWildcardUrls(
+               'https://www.google.com:8443',
+               ['https://www.google.com:8443/jsapi'])!.hostname)
+        .toBe('www.google.com');
+  });
+
+  it('MatchWildcardUrlsWildcardPortMatchesAnyPort', () => {
+    expect(matchWildcardUrls(
+               '//www.google.com:*',
+               ['https://www.google.com:8443/jsapi'])!.hostname)
+        .toBe('www.google.com');
+  });
+
+  it('MatchWildcardUrlsWildcardIsLabelBounded', () => {
+    // "*.google.com" must not match the bare "google.com" label.
+    expect(matchWildcardUrls(
+               '//*.google.com',
+               ['https://google.com/jsapi']))
+        .toBeNull();
+    // And it must not match a host that merely ends with the same string.
+    expect(matchWildcardUrls(
+               '//*.google.com',
+               ['https://evilgoogle.com/jsapi']))
+        .toBeNull();
+  });
+
+  it('MatchWildcardUrlsBareWildcardHostMatchesAnyHost', () => {
+    expect(matchWildcardUrls(
+               '//*',
+               ['https://www.google.com/jsapi'])!.hostname)
+        .toBe('www.google.com');
+  });
+
+  it('MatchWildcardUrlsPreservesCredentialsAndIpv6AndPortEvidence', () => {
+    const match = matchWildcardUrls(
+        'https://user:secret@[2001:db8::1]:8443',
+        ['https://user:secret@[2001:db8::1]:8443/endpoint.js']);
+    expect(match).not.toBeNull();
+    expect(match!.hostname).toBe('[2001:db8::1]');
+    expect(match!.port).toBe('8443');
+    expect(match!.username).toBe('user');
+    expect(match!.password).toBe('secret');
+    expect(match!.pathname).toBe('/endpoint.js');
+  });
+
+  it('MatchWildcardUrlsAllPartsMustMatchTogether', () => {
+    // Host matches but port does not: no match, the endpoint is not allowed.
+    expect(matchWildcardUrls(
+               'https://*.google.com:9000',
+               ['https://www.google.com/jsapi']))
+        .toBeNull();
+    // Host and port match but path does not.
+    expect(matchWildcardUrls(
+               'https://*.google.com/other',
+               ['https://www.google.com/jsapi']))
+        .toBeNull();
+  });
+
+  it('ParseSourceExpressionReturnsNullForUnparsableInput', () => {
+    expect(parseSourceExpression('://not a url')).toBeNull();
   });
 
   it('GetHostname', () => {
